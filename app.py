@@ -11,23 +11,28 @@ from pynput import mouse, keyboard  # For tracking clicks and keystrokes
 from dotenv import load_dotenv
 import os
 import subprocess
+import matplotlib.pyplot as plt
+import ssl
+import sendgrid
+from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+import base64
+import urllib.request
+from sendgrid import SendGridAPIClient
 
 load_dotenv()
 
-EMAIL_HOST = os.getenv("EMAIL_HOST")
-EMAIL_PORT = os.getenv("EMAIL_PORT")
-EMAIL_USERNAME = os.getenv("EMAIL_USERNAME")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_USERNAME = os.getenv("EMAIL_SENDER")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
 
 # Dictionary to track mouse and keyboard activity per hour
-activity_per_hour = {hour: (0, 0) for hour in range(9, 22)}
+activity_per_hour = {hour: (0, 0) for hour in range(9, 24)}
 usage_log = {}
 
 def is_within_work_hours():
     current_time = datetime.now().time()
     start_time = datetime.strptime("09:00", "%H:%M").time()
-    end_time = datetime.strptime("22:00", "%H:%M").time()
+    end_time = datetime.strptime("23:40", "%H:%M").time()
     return start_time <= current_time <= end_time
 
 def get_active_window():
@@ -98,6 +103,42 @@ def on_press(key):
     mouse_clicks, keyboard_presses = activity_per_hour[current_hour]
     activity_per_hour[current_hour] = (mouse_clicks, keyboard_presses + 1)
 
+def generate_pie_chart(usage_data):
+    labels = list(usage_data.keys())
+    times = [info['total_time'] for info in usage_data.values()]
+    
+    plt.figure(figsize=(6, 6))
+    plt.pie(times, labels=labels, autopct='%1.1f%%', startangle=140)
+    plt.title('App Usage Breakdown')
+    
+    # Save as an image
+    pie_chart_path = './REPORTS/app_usage_pie_chart.png'
+    plt.savefig(pie_chart_path)
+    plt.close()
+    return pie_chart_path
+
+def generate_bar_graph(activity_data):
+    hours = list(activity_data.keys())
+    
+    # Get mouse clicks and keyboard presses from tuples
+    mouse_clicks = [activity_data[hour][0] for hour in hours]  # First element in the tuple
+    keyboard_presses = [activity_data[hour][1] for hour in hours]  # Second element in the tuple
+    
+    plt.figure(figsize=(8, 6))
+    width = 0.35
+    plt.bar(hours, mouse_clicks, width, label='Mouse Clicks', color='blue')
+    plt.bar([h + width for h in hours], keyboard_presses, width, label='Keyboard Presses', color='orange')
+    
+    plt.xlabel('Hour of the Day')
+    plt.ylabel('Number of Actions')
+    plt.title('Mouse Clicks and Keyboard Presses per Hour')
+    plt.legend()
+    
+    bar_graph_path = './Reports/activity_bar_graph.png'
+    plt.savefig(bar_graph_path)
+    plt.close()
+    return bar_graph_path
+
 def generate_pdf_report():
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -118,14 +159,21 @@ def generate_pdf_report():
           output = f"App: {app}, Total Time Used: {hours} hours and {minutes} minutes"
         else:
          output = f"App: {app}, Total Time Used: {minutes} minutes"
+        pdf.cell(200, 10, txt=output, ln=True)
 
-    pdf.cell(200, 10, txt=output, ln=True)
+    pie_chart_path = generate_pie_chart(usage_log)
+    pdf.ln(10)
+    pdf.image(pie_chart_path, x=10, y=None, w=150)
 
     pdf.ln(10)
     pdf.cell(200, 10, txt="Mouse Clicks and Keyboard Presses by Hour:", ln=True)
     for hour, (mouse_clicks, keyboard_presses) in activity_per_hour.items():
         if mouse_clicks > 0 or keyboard_presses > 0:
             pdf.cell(200, 10, txt=f"{hour}:00 - {hour + 1}:00 -> Mouse Clicks: {mouse_clicks}, Keyboard Presses: {keyboard_presses}", ln=True)
+
+    bar_graph_path = generate_bar_graph(activity_per_hour)
+    pdf.add_page()
+    pdf.image(bar_graph_path, x=10, y=None, w=180)
 
     timestamp = datetime.now().strftime("%Y-%m-%d")
     pdf_output = f"app_usage_report_{timestamp}.pdf"
@@ -136,27 +184,40 @@ def generate_pdf_report():
     send_email(pdf_file_path)
 
 def send_email(pdf_filename):
-    print("""Sending the PDF report via email.""")
-    msg = MIMEMultipart()
-    msg['From'] = EMAIL_USERNAME
-    msg['To'] = EMAIL_RECEIVER
-    msg['Subject'] = "Daily Application Usage Report"
+    print("""Sending the PDF report via email using SendGrid.""")
 
-    # Attach the PDF file
-    with open(pdf_filename, 'rb') as attachment:
-        part = MIMEBase('application', 'octet-stream')
-        part.set_payload(attachment.read())
-        encoders.encode_base64(part)
-        part.add_header('Content-Disposition', f'attachment; filename={pdf_filename}')
-        msg.attach(part)
+    with open(pdf_filename, 'rb') as f:
+        pdf_data = f.read()
+        encoded_pdf = base64.b64encode(pdf_data).decode()  # Encode as base64 string
 
-    # Sending the email via SMTP
+    message = Mail(
+        from_email=EMAIL_USERNAME,
+        to_emails=EMAIL_RECEIVER,
+        subject="Daily Application Usage Report",
+        plain_text_content="Please find the attached application usage report."
+    )
+
+    attachment = Attachment(
+        FileContent(encoded_pdf),
+        FileName(pdf_filename),
+        FileType('application/pdf'),
+        Disposition('attachment')
+    )
+
+    message.attachment = attachment
+
     try:
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USERNAME, EMAIL_RECEIVER, msg.as_string())
-            print(f"Email sent to {EMAIL_RECEIVER}")
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        urllib.request.urlopen = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=ssl_context)
+        ).open
+
+        sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
+        response = sg.send(message)
+        print(f"Email sent successfully! Status code: {response.status_code}")
     except Exception as e:
         print(f"Failed to send email: {e}")
 
