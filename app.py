@@ -1,8 +1,6 @@
-import psutil
 import time
 from datetime import datetime
 import platform
-import smtplib
 from fpdf import FPDF
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -13,7 +11,6 @@ import os
 import subprocess
 import matplotlib.pyplot as plt
 import ssl
-import sendgrid
 from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
 import base64
 import urllib.request
@@ -26,13 +23,13 @@ EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
 
 # Dictionary to track mouse and keyboard activity per hour
-activity_per_hour = {hour: (0, 0) for hour in range(9, 24)}
+activity_per_hour = {hour: (0, 0) for hour in range(9, 18)}
 usage_log = {}
 
 def is_within_work_hours():
     current_time = datetime.now().time()
     start_time = datetime.strptime("09:00", "%H:%M").time()
-    end_time = datetime.strptime("23:40", "%H:%M").time()
+    end_time = datetime.strptime("17:00", "%H:%M").time()
     return start_time <= current_time <= end_time
 
 def get_active_window():
@@ -80,17 +77,16 @@ def get_current_hour():
     return datetime.now().hour
 
 def log_application_usage():
-    print("""Track app usage between work hours.""")
     while is_within_work_hours():
         active_window = get_active_window()
         if active_window:
             if active_window not in usage_log:
                 usage_log[active_window] = {'start_time': datetime.now(), 'total_time': 0}
-            usage_log[active_window]['total_time'] += 10  # Increment time by 10 seconds
+            usage_log[active_window]['total_time'] += 10  # 10 sec increments
 
-        time.sleep(10)  # Check every 10 seconds
+        time.sleep(10)  # 10 seconds, can be changed
 
-    generate_pdf_report()  # At 5 PM, generate PDF and stop
+    generate_pdf_report()  # Generating pdf after closing app (or after working hours)
 
 def on_click(x, y, button, pressed):
     if pressed:
@@ -120,9 +116,8 @@ def generate_pie_chart(usage_data):
 def generate_bar_graph(activity_data):
     hours = list(activity_data.keys())
     
-    # Get mouse clicks and keyboard presses from tuples
-    mouse_clicks = [activity_data[hour][0] for hour in hours]  # First element in the tuple
-    keyboard_presses = [activity_data[hour][1] for hour in hours]  # Second element in the tuple
+    mouse_clicks = [activity_data[hour][0] for hour in hours] 
+    keyboard_presses = [activity_data[hour][1] for hour in hours]  
     
     plt.figure(figsize=(8, 6))
     width = 0.35
@@ -181,7 +176,7 @@ def generate_pdf_report():
     pdf.output(pdf_file_path)
     print(f"PDF report saved as {pdf_output}")
 
-    send_email(pdf_file_path)
+    # send_email(pdf_file_path)
 
 def send_email(pdf_filename):
     print("""Sending the PDF report via email using SendGrid.""")
@@ -222,7 +217,7 @@ def send_email(pdf_filename):
         print(f"Failed to send email: {e}")
 
 if __name__ == "__main__":
-    # Set up listeners for mouse and keyboard tracking
+    # Setting up listeners for mouse and keyboard tracking
     mouse_listener = mouse.Listener(on_click=on_click)
     keyboard_listener = keyboard.Listener(on_press=on_press)
     
@@ -233,9 +228,9 @@ if __name__ == "__main__":
         while is_within_work_hours():
             log_application_usage()
     except KeyboardInterrupt:
-        # Output the log when stopped (manually stop before 5 PM)
+        # if stopped manually, still generate Pdf report
         generate_pdf_report()
     
-    # Stop listeners when work hours end or program ends
+    # Stopping listeners 
     mouse_listener.stop()
     keyboard_listener.stop()
