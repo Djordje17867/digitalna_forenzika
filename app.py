@@ -176,7 +176,7 @@ def generate_pdf_report():
     pdf.output(pdf_file_path)
     print(f"PDF report saved as {pdf_output}")
 
-    # send_email(pdf_file_path)
+    send_email(pdf_file_path)
 
 def send_email(pdf_filename):
     print("""Sending the PDF report via email using SendGrid.""")
